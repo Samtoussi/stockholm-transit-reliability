@@ -1,0 +1,6 @@
+requests
+python-dotenv
+azure-identity
+azure-storage-file-datalake
+gtfs-realtime-bindings
+databricks-connect==17.3.*
