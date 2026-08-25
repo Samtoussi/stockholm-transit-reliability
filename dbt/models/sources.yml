@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: silver
+    catalog: dbw_stockholm_transit_dev
+    schema: silver
+
+    tables:
+      - name: routes
+      - name: trips
+      - name: stops
+      - name: stop_events
+      - name: realtime_stop_events

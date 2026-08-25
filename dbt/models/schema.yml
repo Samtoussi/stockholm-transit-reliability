@@ -1,0 +1,215 @@
+version: 2
+
+models:
+  - name: reliability_stop_observations
+    description: >
+      Stop-level realtime observations matched against the scheduled GTFS
+      timetable and enriched with route, trip, and stop information.
+
+    columns:
+      - name: service_date
+        description: GTFS service date for the observed trip.
+        tests:
+          - not_null
+
+      - name: trip_id
+        description: Unique identifier for the scheduled trip.
+        tests:
+          - not_null
+
+      - name: route_id
+        description: Route associated with the trip.
+        tests:
+          - not_null
+
+      - name: stop_id
+        description: Stop associated with the observation.
+        tests:
+          - not_null
+
+      - name: stop_sequence
+        description: Position of the stop within the trip.
+        tests:
+          - not_null
+
+      - name: feed_timestamp
+        description: Timestamp of the GTFS-Realtime snapshot.
+        tests:
+          - not_null
+
+      - name: transport_mode
+        description: Transport mode associated with the route.
+        tests:
+          - not_null
+
+  - name: route_reliability
+    description: >
+      Aggregated route-level reliability metrics derived from
+      stop-level realtime observations.
+
+    columns:
+      - name: route_id
+        tests:
+          - not_null
+
+      - name: transport_mode
+        tests:
+          - not_null
+
+      - name: observations
+        tests:
+          - not_null
+
+      - name: avg_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: median_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: p95_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: on_time_pct
+        tests:
+          - not_null
+
+      - name: over_5_min_late_pct
+        tests:
+          - not_null
+
+      - name: over_10_min_late_pct
+        tests:
+          - not_null
+
+  - name: stop_reliability
+    description: >
+      Aggregated stop-level reliability metrics derived from
+      stop-level realtime observations.
+
+    columns:
+      - name: stop_id
+        tests:
+          - not_null
+
+      - name: stop_name
+        tests:
+          - not_null
+
+      - name: transport_mode
+        tests:
+          - not_null
+
+      - name: observations
+        tests:
+          - not_null
+
+      - name: avg_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: median_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: p95_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: on_time_pct
+        tests:
+          - not_null
+
+      - name: over_5_min_late_pct
+        tests:
+          - not_null
+
+      - name: over_10_min_late_pct
+        tests:
+          - not_null        
+
+  - name: hourly_reliability_patterns
+    description: >
+      Reliability metrics aggregated by scheduled hour of day
+      and transport mode.
+
+    columns:
+      - name: transport_mode
+        tests:
+          - not_null
+
+      - name: scheduled_hour
+        tests:
+          - not_null
+
+      - name: observations
+        tests:
+          - not_null
+
+      - name: avg_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: median_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: p95_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: on_time_pct
+        tests:
+          - not_null
+
+      - name: over_5_min_late_pct
+        tests:
+          - not_null
+
+      - name: over_10_min_late_pct
+        tests:
+          - not_null
+
+  - name: daily_reliability_metrics
+    description: >
+      Daily reliability metrics aggregated by service date
+      and transport mode.
+
+    columns:
+      - name: service_date
+        tests:
+          - not_null
+
+      - name: transport_mode
+        tests:
+          - not_null
+
+      - name: observations
+        tests:
+          - not_null
+
+      - name: avg_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: median_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: p95_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: on_time_pct
+        tests:
+          - not_null
+
+      - name: over_5_min_late_pct
+        tests:
+          - not_null
+
+      - name: over_10_min_late_pct
+        tests:
+          - not_null
