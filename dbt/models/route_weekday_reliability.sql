@@ -1,23 +1,45 @@
 with base as (
 
     select
-        stop_id,
-        stop_name,
+        route_id,
+        route_short_name,
+        route_long_name,
         transport_mode,
+
+        service_date,
         arrival_delay_seconds
 
     from {{ ref('reliability_stop_events') }}
+
+    where arrival_delay_seconds is not null
+
+),
+
+enriched as (
+
+    select
+        *,
+
+        dayofweek(service_date) as day_of_week_number,
+
+        date_format(service_date, 'EEEE') as day_of_week
+
+    from base
 
 ),
 
 aggregated as (
 
     select
-        stop_id,
-        stop_name,
+        route_id,
+        route_short_name,
+        route_long_name,
         transport_mode,
 
-        count(*) as observations,
+        day_of_week_number,
+        day_of_week,
+
+        count(*) as stop_events,
 
         round(
             avg(arrival_delay_seconds),
@@ -67,14 +89,15 @@ aggregated as (
             2
         ) as over_10_min_late_pct
 
-    from base
-
-    where arrival_delay_seconds is not null
+    from enriched
 
     group by
-        stop_id,
-        stop_name,
-        transport_mode
+        route_id,
+        route_short_name,
+        route_long_name,
+        transport_mode,
+        day_of_week_number,
+        day_of_week
 
 )
 

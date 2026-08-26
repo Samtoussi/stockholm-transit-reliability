@@ -17,3 +17,5 @@ Thumbs.db
 # Airflow
 airflow/logs/
 logs/
+
+secrets/

@@ -1,23 +1,30 @@
 with base as (
 
     select
-        stop_id,
-        stop_name,
+        route_id,
+        route_short_name,
+        route_long_name,
         transport_mode,
+        direction_id,
         arrival_delay_seconds
 
     from {{ ref('reliability_stop_events') }}
+
+    where arrival_delay_seconds is not null
+      and direction_id is not null
 
 ),
 
 aggregated as (
 
     select
-        stop_id,
-        stop_name,
+        route_id,
+        route_short_name,
+        route_long_name,
         transport_mode,
+        direction_id,
 
-        count(*) as observations,
+        count(*) as stop_events,
 
         round(
             avg(arrival_delay_seconds),
@@ -69,12 +76,12 @@ aggregated as (
 
     from base
 
-    where arrival_delay_seconds is not null
-
     group by
-        stop_id,
-        stop_name,
-        transport_mode
+        route_id,
+        route_short_name,
+        route_long_name,
+        transport_mode,
+        direction_id
 
 )
 

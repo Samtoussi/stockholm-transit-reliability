@@ -1,6 +1,7 @@
 version: 2
 
 models:
+
   - name: reliability_stop_observations
     description: >
       Stop-level realtime observations matched against the scheduled GTFS
@@ -42,10 +43,46 @@ models:
         tests:
           - not_null
 
+
+  - name: reliability_stop_events
+    description: >
+      Canonical stop-level reliability events derived from GTFS-Realtime
+      snapshot history. One row per service date, trip, stop, and stop sequence.
+
+    columns:
+      - name: service_date
+        tests:
+          - not_null
+
+      - name: trip_id
+        tests:
+          - not_null
+
+      - name: stop_id
+        tests:
+          - not_null
+
+      - name: stop_sequence
+        tests:
+          - not_null
+
+      - name: route_id
+        tests:
+          - not_null
+
+      - name: transport_mode
+        tests:
+          - not_null
+
+      - name: feed_timestamp
+        tests:
+          - not_null
+
+
   - name: route_reliability
     description: >
-      Aggregated route-level reliability metrics derived from
-      stop-level realtime observations.
+      Aggregated route-level reliability metrics derived from canonical
+      stop-level reliability events.
 
     columns:
       - name: route_id
@@ -84,10 +121,11 @@ models:
         tests:
           - not_null
 
+
   - name: stop_reliability
     description: >
-      Aggregated stop-level reliability metrics derived from
-      stop-level realtime observations.
+      Aggregated stop-level reliability metrics derived from canonical
+      stop-level reliability events.
 
     columns:
       - name: stop_id
@@ -128,7 +166,8 @@ models:
 
       - name: over_10_min_late_pct
         tests:
-          - not_null        
+          - not_null
+
 
   - name: hourly_reliability_patterns
     description: >
@@ -172,6 +211,7 @@ models:
         tests:
           - not_null
 
+
   - name: daily_reliability_metrics
     description: >
       Daily reliability metrics aggregated by service date
@@ -213,3 +253,219 @@ models:
       - name: over_10_min_late_pct
         tests:
           - not_null
+
+
+  - name: route_stop_reliability
+    description: >
+      Route-level reliability metrics by stop, derived from canonical
+      GTFS-Realtime stop events. One row per route and stop combination.
+
+    columns:
+      - name: route_id
+        tests:
+          - not_null
+
+      - name: stop_id
+        tests:
+          - not_null
+
+      - name: transport_mode
+        tests:
+          - not_null
+
+      - name: stop_events
+        tests:
+          - not_null
+
+      - name: on_time_pct
+        tests:
+          - not_null
+
+
+  - name: route_direction_reliability
+    description: >
+      Route reliability metrics by GTFS direction, derived from canonical
+      realtime stop events. One row per route and direction.
+
+    columns:
+      - name: route_id
+        tests:
+          - not_null
+
+      - name: direction_id
+        tests:
+          - not_null
+
+      - name: transport_mode
+        tests:
+          - not_null
+
+      - name: stop_events
+        tests:
+          - not_null
+
+      - name: on_time_pct
+        tests:
+          - not_null
+
+
+  - name: route_hourly_reliability
+    description: >
+      Route reliability metrics by scheduled service hour, derived from
+      canonical realtime stop events. One row per route and scheduled hour.
+
+    columns:
+      - name: route_id
+        tests:
+          - not_null
+
+      - name: scheduled_hour
+        tests:
+          - not_null
+
+      - name: transport_mode
+        tests:
+          - not_null
+
+      - name: stop_events
+        tests:
+          - not_null
+
+      - name: on_time_pct
+        tests:
+          - not_null
+
+
+  - name: delay_propagation_stop_events
+    description: >
+      Canonical stop events enriched with the previous stop's arrival delay
+      for the same trip. Used to measure delay accumulation and recovery
+      between consecutive stops.
+
+    columns:
+      - name: service_date
+        tests:
+          - not_null
+
+      - name: trip_id
+        tests:
+          - not_null
+
+      - name: stop_id
+        tests:
+          - not_null
+
+      - name: stop_sequence
+        tests:
+          - not_null
+
+      - name: route_id
+        tests:
+          - not_null
+
+      - name: transport_mode
+        tests:
+          - not_null
+
+      - name: arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: is_extreme_propagation
+        description: >
+          Flags consecutive-stop delay changes greater than 600 seconds
+          in absolute magnitude. Null for the first observed stop of a trip.
+
+
+  - name: route_delay_propagation
+    description: >
+      Route-level delay propagation metrics derived from consecutive
+      canonical stop events. Extreme stop-to-stop delay changes above
+      10 minutes are retained for quality monitoring but excluded from
+      normal accumulation and recovery metrics.
+
+    columns:
+      - name: route_id
+        tests:
+          - not_null
+
+      - name: transport_mode
+        tests:
+          - not_null
+
+      - name: propagation_events
+        tests:
+          - not_null
+
+      - name: extreme_propagation_events
+        tests:
+          - not_null
+
+      - name: extreme_propagation_pct
+        tests:
+          - not_null
+
+      - name: avg_delay_change_seconds
+        description: >
+          Average stop-to-stop delay change across non-extreme propagation
+          events. Null when a route has no non-extreme propagation events.
+
+      - name: pct_delay_accumulated
+        description: >
+          Percentage of non-extreme propagation events where delay increased.
+          Null when a route has no non-extreme propagation events.
+
+      - name: pct_delay_recovered
+        description: >
+          Percentage of non-extreme propagation events where delay decreased.
+          Null when a route has no non-extreme propagation events.
+
+  - name: route_weekday_reliability
+    description: >
+      Route reliability metrics by day of week, derived from canonical
+      realtime stop events. One row per route and weekday.
+
+    columns:
+      - name: route_id
+        tests:
+          - not_null
+
+      - name: transport_mode
+        tests:
+          - not_null
+
+      - name: day_of_week_number
+        tests:
+          - not_null
+
+      - name: day_of_week
+        tests:
+          - not_null
+
+      - name: stop_events
+        tests:
+          - not_null
+
+      - name: avg_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: median_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: p95_arrival_delay_seconds
+        tests:
+          - not_null
+
+      - name: on_time_pct
+        tests:
+          - not_null
+
+      - name: over_5_min_late_pct
+        tests:
+          - not_null
+
+      - name: over_10_min_late_pct
+        tests:
+          - not_null          
