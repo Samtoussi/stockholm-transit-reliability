@@ -1,10 +1,10 @@
 # Stockholm Transit Reliability
 
-A production-inspired data engineering platform for analyzing the reliability of public transport in Stockholm using static schedules and realtime GTFS data.
+A production-inspired data engineering platform for analyzing the reliability of public transport in Stockholm using static schedules and GTFS-Realtime data.
 
-The project combines **Azure Data Lake Storage, Databricks, Apache Spark, Delta Lake, dbt, Apache Airflow, and Databricks SQL** to build an end-to-end pipeline from raw transit feeds to reliability analytics and an interactive dashboard.
+The project combines **Azure Data Lake Storage, Databricks, PySpark, Delta Lake, dbt, Apache Airflow, Databricks SQL, and Power BI** to build an end-to-end pipeline from raw transit feeds to historical reliability analytics.
 
-> **Current release: V1**
+> **Current release: V2 — Analytical Depth**
 
 ---
 
@@ -14,18 +14,22 @@ The project combines **Azure Data Lake Storage, Databricks, Apache Spark, Delta 
 - [Architecture](#architecture)
 - [Data Sources](#data-sources)
 - [Pipeline](#pipeline)
-  - [Static GTFS Pipeline](#static-gtfs-pipeline)
-  - [Realtime GTFS Pipeline](#realtime-gtfs-pipeline)
+  - [Static Pipeline](#static-pipeline)
+  - [Realtime Pipeline](#realtime-pipeline)
 - [Data Model](#data-model)
 - [Orchestration](#orchestration)
-- [Data Quality and Reliability](#data-quality-and-reliability)
-- [Analytics Layer](#analytics-layer)
-- [Dashboard](#dashboard)
+- [Data Quality](#data-quality)
+- [Analytics](#analytics)
+- [Power BI Dashboard](#power-bi-dashboard)
+- [Analytical Guardrails](#analytical-guardrails)
+- [V2 Findings](#v2-findings)
+- [Cost Awareness](#cost-awareness)
 - [Technology Stack](#technology-stack)
-- [Repository Structure](#repository-structure)
 - [Engineering Decisions](#engineering-decisions)
-- [V1 Scope](#v1-scope)
+- [Repository Structure](#repository-structure)
+- [Version History](#version-history)
 - [Future Development](#future-development)
+- [Project Philosophy](#project-philosophy)
 
 ---
 
@@ -33,39 +37,48 @@ The project combines **Azure Data Lake Storage, Databricks, Apache Spark, Delta 
 
 Public transport reliability cannot be understood from schedules alone.
 
-A scheduled timetable describes **what should happen**, while GTFS-Realtime describes **what is happening**. This project combines both to create a historical analytical dataset capable of measuring how reliably public transport operates across routes, stops, transport modes, dates, and hours of the day.
+Static GTFS describes **what should happen**, while GTFS-Realtime describes **what is happening**. This project combines both to preserve realtime observations historically and analyze reliability across routes, stops, directions, transport modes, weekdays, and hours of the day.
 
-The V1 platform:
+The platform:
 
-- ingests static GTFS timetable data
+- ingests and archives static GTFS data
 - collects GTFS-Realtime TripUpdates
-- archives raw source data in Azure Data Lake Storage
-- processes data using PySpark in Databricks
-- stores validated analytical datasets as Delta tables
-- joins realtime observations against the validated static transit network
+- stores immutable source snapshots in Azure Data Lake Storage
+- processes and validates data with PySpark in Databricks
+- stores trusted Silver datasets using Delta Lake
 - preserves historical realtime observations
-- models reliability metrics using dbt
+- models reliability metrics with dbt
 - orchestrates the realtime pipeline with Apache Airflow
-- exposes analytical datasets through Databricks SQL
-- presents reliability metrics in an interactive dashboard
+- serves analytical models through Databricks SQL
+- presents historical reliability analysis in Power BI
 
-The project is designed as a **production-inspired system**, while deliberately avoiding infrastructure and complexity that do not yet solve a real problem.
+**V1** established the working end-to-end platform.
+
+**V2** keeps that architecture and focuses on deeper analysis: **P95 tail risk, route-stop reliability, directional asymmetry, temporal patterns, and delay propagation**.
+
+The project is intentionally production-inspired without treating architectural complexity as a goal of its own.
 
 ---
 
 ## Architecture
 
-![Stockholm Transit Reliability Architecture](docs/architecture-v1.png)
+![Stockholm Transit Reliability Architecture](docs/architecture-v2.png)
 
-The architecture separates the system into three major concerns:
+The system separates four main concerns:
 
-**Raw storage** preserves source data and historical realtime snapshots.
+**Raw storage**  
+Azure Data Lake Storage preserves static source files and timestamped GTFS-Realtime snapshots.
 
-**Silver processing** converts raw transit data into validated, typed and queryable Delta datasets.
+**Silver processing**  
+Databricks and PySpark convert source data into validated, typed Delta datasets.
 
-**Gold modeling** transforms those datasets into reliability-focused analytical models used by the dashboard.
+**Gold modeling**  
+dbt transforms trusted Silver data into reliability-focused analytical models.
 
-Apache Airflow operates separately as the orchestration layer for the realtime pipeline.
+**Serving and visualization**  
+Databricks SQL serves the Gold layer to Power BI.
+
+Apache Airflow operates separately as the **control plane**, coordinating when realtime jobs execute and in what order.
 
 ---
 
@@ -73,7 +86,7 @@ Apache Airflow operates separately as the orchestration layer for the realtime p
 
 ### Static GTFS
 
-Static GTFS provides the reference transit network and timetable data used by the platform.
+Static GTFS provides the reference transit network and timetable.
 
 Important entities include:
 
@@ -83,31 +96,35 @@ Important entities include:
 - stop times
 - service information
 
-The static dataset provides the reference needed to determine which realtime observations belong to the transit network being analyzed.
+These datasets define the validated transit scope used by downstream realtime processing.
 
 ### GTFS-Realtime
 
-The realtime pipeline consumes **TripUpdates** encoded as GTFS-Realtime Protocol Buffers.
+The realtime pipeline consumes **TripUpdates** encoded as Protocol Buffers.
 
-Each snapshot can contain updated arrival and departure information for many trips and stops.
-
-Instead of keeping only the newest state, the platform archives timestamped snapshots so realtime data can become a **historical analytical dataset**.
+Instead of keeping only the latest feed state, timestamped snapshots are archived so an ephemeral realtime source becomes a **historical analytical dataset**.
 
 ---
 
 ## Pipeline
 
-The platform contains separate static and realtime processing paths that converge in the analytical layers.
+### Static Pipeline
 
-### Static GTFS Pipeline
+```text
+Static GTFS
+    ↓
+Python ingestion
+    ↓
+Azure Data Lake Storage
+    ↓
+Databricks Volume
+    ↓
+PySpark validation & transformation
+    ↓
+Delta Silver
+```
 
-Static GTFS data is ingested and archived in Azure Data Lake Storage.
-
-The current V1 processing workflow uses extracted GTFS files available through a Databricks Unity Catalog Volume.
-
-PySpark transformations convert the source files into validated Delta Silver tables.
-
-The static Silver layer provides trusted reference entities such as:
+Static Silver tables include trusted entities such as:
 
 ```text
 routes
@@ -116,22 +133,18 @@ stops
 stop_times
 ```
 
-These datasets establish the valid Stockholm transit scope used by downstream realtime processing.
+Movement from the archived static GTFS files in ADLS to the Databricks working volume remains manual in V2.
 
-> In V1, movement from the archived static GTFS source in ADLS to the Databricks working volume is not fully automated. This is an intentional V1 boundary rather than being hidden behind unnecessary infrastructure.
+This is intentional: static timetable data changes infrequently, and automating the handoff does not currently solve a significant operational problem.
 
-### Realtime GTFS Pipeline
-
-Realtime processing follows a historical snapshot architecture.
+### Realtime Pipeline
 
 ```text
 GTFS-Realtime TripUpdates
         ↓
 Python ingestion
         ↓
-Azure Data Lake Storage
-        ↓
-Timestamped protobuf snapshots
+ADLS timestamped snapshots
         ↓
 Databricks / PySpark
         ↓
@@ -139,16 +152,16 @@ Decode Protocol Buffer
         ↓
 Flatten stop-level observations
         ↓
-Join against validated static trips
+Join against validated trips
         ↓
-Deduplicate observations
+Deduplicate
         ↓
 Idempotency check
         ↓
 Append to Delta Silver
 ```
 
-Raw snapshots are stored using a time-partitioned structure similar to:
+Raw realtime snapshots are stored using a structure similar to:
 
 ```text
 ingestion_date=YYYY-MM-DD/
@@ -156,9 +169,7 @@ ingestion_date=YYYY-MM-DD/
     └── trip_updates_HHMMSS.pb
 ```
 
-The realtime processor discovers the latest available snapshot directly from ADLS.
-
-Each Protocol Buffer feed is flattened into stop-level observations containing fields such as:
+The resulting Silver dataset contains fields including:
 
 ```text
 trip_id
@@ -172,9 +183,7 @@ feed_timestamp
 start_date
 ```
 
-Realtime trips are then joined against the validated static Silver `trips` dataset.
-
-This prevents observations outside the validated transit scope from entering the analytical model.
+Realtime trips must exist in the validated static `trips` table before they are accepted into the analytical pipeline.
 
 ---
 
@@ -184,21 +193,19 @@ The project follows a medallion-inspired architecture.
 
 ### Raw
 
-Azure Data Lake Storage acts as the durable raw and archive layer.
+ADLS acts as the durable source/archive layer.
 
-Raw source data is preserved rather than overwritten, allowing ingestion and transformation to remain separate concerns.
+Source data is preserved rather than overwritten so ingestion and transformation remain separate concerns and historical snapshots remain recoverable.
 
 ### Silver
 
-Silver contains validated operational datasets stored using Delta Lake.
+Silver contains validated operational datasets stored as Delta tables.
 
-The layer contains both static transit entities and historical realtime observations.
-
-The realtime observation grain is:
+The realtime grain is:
 
 > **One realtime stop observation per feed snapshot.**
 
-Duplicate realtime observations are removed using:
+Duplicate observations within a snapshot are removed using:
 
 ```text
 feed_timestamp
@@ -206,171 +213,268 @@ feed_timestamp
 + stop_sequence
 ```
 
-The realtime Silver table is append-only across new snapshots.
+Before writing a snapshot, the pipeline also checks whether its `feed_timestamp` already exists in Silver.
+
+This makes historical realtime processing **append-only and idempotent** across repeated runs.
 
 ### Gold
 
-dbt transforms Silver data into analytics-oriented reliability models.
+dbt contains the analytical reliability logic.
 
-Current V1 models include:
+Important V2 models include:
 
 ```text
 reliability_stop_observations
 route_reliability
 stop_reliability
-hourly_reliability_patterns
-daily_reliability_metrics
+route_stop_reliability
+route_direction_reliability
+route_hourly_reliability
+route_weekday_reliability
+delay_propagation_stop_events
+route_delay_propagation
 ```
 
-This separates operational transformation from analytical business logic.
+V2 extends the analytical layer beyond basic averages with:
+
+- median delay
+- P95 arrival delay
+- route-stop analysis
+- direction-level reliability
+- hourly and weekday analysis
+- delay accumulation and recovery
 
 ---
 
 ## Orchestration
 
-Apache Airflow orchestrates the realtime pipeline.
+Apache Airflow orchestrates the realtime workflow.
 
-The DAG is designed to run every **10 minutes** and coordinates the major realtime workflow stages:
+The DAG is designed to run every **10 minutes**:
 
 ```text
 ingest realtime snapshot
         ↓
-process realtime Silver
+transform realtime Silver
         ↓
-validate resulting data
+validate Silver
 ```
 
-Airflow runs locally through Docker in V1.
+Airflow runs locally through Docker during the current development versions.
 
-Databricks processing is triggered through the Databricks Jobs API, allowing orchestration and distributed compute to remain separate concerns.
+Databricks processing is triggered through the Databricks Jobs API, keeping orchestration separate from distributed compute.
 
-This means Airflow controls **when and in what order work happens**, while Databricks and Spark perform the actual distributed data processing.
+The local environment is not kept running continuously during normal development because doing so would consume cloud compute without providing equivalent value.
 
-The local Airflow environment is intentionally not kept running continuously during development in order to avoid unnecessary cloud compute usage.
+Continuous cloud-hosted execution is reserved for a later production experiment.
 
 ---
 
-## Data Quality and Reliability
+## Data Quality
 
-Reliability is treated as part of the pipeline rather than only as a dashboard concern.
+Validation is part of the pipeline rather than only a dashboard concern.
 
-### Static validation
+Static checks include:
 
-Static GTFS profiling and validation checks include:
-
-- missing trip identifiers
-- missing stop identifiers
+- missing identifiers
 - missing arrival/departure times
 - trip-to-route reference integrity
-- stop-to-stop-times reference integrity
-- duplicate trip and stop sequence combinations
-- stop sequence validity
-- trips with invalid stop counts
-- GTFS times extending beyond 24:00
+- stop reference integrity
+- duplicate trip/stop-sequence combinations
+- stop-sequence validity
+- invalid trip stop counts
+- GTFS times beyond 24:00
 
-The source dataset contains millions of stop-time records, making Spark useful both as a learning objective and as the distributed processing engine for the project.
+Realtime protection includes:
 
-### Realtime validation
+- validated trip scope
+- snapshot-level deduplication
+- feed-level idempotency
+- append-only historical storage
 
-Realtime processing includes several defensive mechanisms.
-
-**Validated scope**
-
-Realtime trips must exist in the static Silver `trips` dataset.
-
-**Deduplication**
-
-Duplicate observations inside a snapshot are removed using the realtime observation key.
-
-**Idempotency**
-
-Before writing a snapshot, the pipeline checks whether its `feed_timestamp` already exists in Silver.
-
-If it does, the write is skipped.
-
-This allows the same snapshot to be processed repeatedly without duplicating historical data.
-
-**Historical append**
-
-New snapshots are appended rather than overwriting existing observations.
-
-This converts an ephemeral realtime feed into a dataset that can be analyzed historically.
+Historical accumulation and duplicate behavior were also sanity-checked directly in Silver during V2 development before the analytical release was finalized.
 
 ---
 
-## Analytics Layer
+## Analytics
 
-The Gold layer focuses on questions that can help explain transit reliability rather than simply displaying raw operational data.
-
-Current analytical dimensions include:
-
-- transport mode
-- route
-- stop
-- service date
-- scheduled hour
-
-Core reliability metrics include:
-
-- total observations
-- average arrival delay
-- on-time rate
-- percentage of arrivals more than five minutes late
-
-For V1, an observation is considered **on time** when its absolute arrival deviation is no greater than 60 seconds.
+An observation is considered **on time** when:
 
 ```text
 |arrival_delay_seconds| <= 60
 ```
 
-A significantly late observation is defined as:
+An arrival more than five minutes late is defined as:
 
 ```text
 arrival_delay_seconds > 300
 ```
 
-The analytical models allow the dashboard to answer questions such as:
+Core metrics include:
 
-- Which transport modes are most reliable?
-- Which routes have the lowest on-time performance?
-- Which stops experience the poorest reliability?
-- How does reliability change throughout the day?
-- How does reliability change across service dates?
-- How do reliability patterns differ between transport modes?
+- total observations
+- average arrival delay
+- median arrival delay
+- P95 arrival delay
+- on-time rate
+- over 5 minutes late
+- over 10 minutes late
+
+### Tail Risk
+
+Average delay alone can hide severe but less frequent delays.
+
+V2 therefore compares average arrival delay with **P95 delay** to separate typical performance from tail risk.
+
+### Directional Reliability
+
+Opposite directions of the same route can perform very differently.
+
+Direction-level models therefore preserve `direction_id` instead of collapsing both directions into a single route average.
+
+### Route-Stop Reliability
+
+Reliability is also modeled at the route-stop grain.
+
+This matters because the same physical stop can perform differently depending on the route serving it.
+
+### Delay Propagation
+
+V2 evaluates delay changes between consecutive stops on the same trip.
+
+This makes it possible to analyze whether a route tends to:
+
+- accumulate delay
+- recover delay
+- remain relatively stable
 
 ---
 
-## Dashboard
+## Power BI Dashboard
 
-![Stockholm Transit Reliability Dashboard](docs/dashboard-v1.png)
+![Stockholm Transit Reliability Power BI Dashboard](docs/dashboard-v2.png)
 
-The V1 Databricks AI/BI dashboard provides an interactive view of the Gold reliability models.
+V2 replaces the original Databricks AI/BI dashboard with a Power BI dashboard focused on deeper historical reliability analysis.
 
-Headline KPIs include:
+The dashboard includes:
 
-- **Total Observations**
-- **Average Delay**
-- **On-Time Rate**
-- **Over 5 Minutes Late**
+- headline reliability KPIs
+- delay by time of day
+- least reliable route-stop combinations
+- average delay vs P95 tail risk
+- reliability gap by direction
+- weekday reliability
+- routes where delay accumulates
 
-The dashboard also includes:
+Global filters support analysis by:
 
-- on-time rate by transport mode
-- on-time rate by scheduled hour
-- lowest-performing routes
-- lowest-performing stops
-- daily reliability by transport mode
+- **transport mode**
+- **route**
 
-A global **Transport Mode** filter allows the dashboard to switch between the complete network and individual modes such as:
+Route identifiers are kept unique internally even when different transport modes share the same public route number.
 
-```text
-bus
-ferry
-local rail
-subway
-```
+The Power BI KPI calculations were cross-checked directly against the Gold `route_reliability` model and matched the SQL results at the V2 validation checkpoint.
 
-The KPI calculations operate on observation-level data so aggregate percentages remain correctly weighted when global filters are applied.
+The dashboard is designed for **historical analysis**, not live operational monitoring.
+
+---
+
+## Analytical Guardrails
+
+The realtime history is still growing, so minimum sample thresholds are used where small samples could otherwise dominate rankings.
+
+| Analysis | Minimum sample |
+|---|---:|
+| Route-level findings | 100 observations |
+| Direction comparison | 50 observations per direction |
+| Route-stop ranking | 20 observations |
+| Delay propagation | 50 propagation events |
+| Time-of-day analysis | 500 stop events per hour |
+
+These are analytical safeguards for the current dataset, not permanent business rules.
+
+They can be revisited as more realtime history is collected.
+
+---
+
+## V2 Findings
+
+The central analytical lesson from V2 is:
+
+> **Transit reliability cannot be understood from a single aggregate metric.**
+
+### 1. Average Delay Can Hide Tail Risk
+
+Among routes with at least 100 observations, **19 routes** had:
+
+- average arrival delay of no more than **3 minutes**
+- P95 arrival delay of at least **10 minutes**
+
+That represented **7.3%** of the qualified routes.
+
+Route **177** was a clear example:
+
+- average delay: approximately **1.4 minutes**
+- P95 delay: approximately **18.5 minutes**
+
+A reasonable average therefore does not necessarily imply low passenger-facing risk.
+
+### 2. Route-Level Metrics Can Hide Directional Asymmetry
+
+Among routes with at least 50 observations in each direction, route **557** showed the largest observed on-time gap:
+
+- direction 0: **84.5% on time**
+- direction 1: **29.0% on time**
+- difference: **55.5 percentage points**
+
+Several other sufficiently observed routes also showed differences above 30 percentage points.
+
+Aggregating both directions into a single route metric would hide this behavior.
+
+### 3. Delay Frequency and Magnitude Tell Different Stories
+
+Route **188** accumulated delay during approximately **72.4%** of observed stop-to-stop propagation events.
+
+However:
+
+- median delay change: **+18 seconds**
+- average delay change: approximately **−13 seconds**
+
+This suggests many relatively small delay increases were offset by fewer, larger recoveries.
+
+How **often** delay increases and **how much** it changes are therefore distinct reliability questions.
+
+### Current Analytical Limitation
+
+Temporal coverage is still uneven because the realtime pipeline has been run intermittently during development.
+
+Time-of-day analysis is already usable with sample guardrails, but weekday coverage is not yet sufficient for strong network-wide conclusions.
+
+V2 therefore avoids presenting incomplete temporal patterns as established behavior.
+
+---
+
+## Cost Awareness
+
+Cloud cost is treated as an engineering constraint.
+
+Azure Cost Management showed that Databricks compute was the dominant Azure service cost during development.
+
+The SQL warehouse was initially configured as **Small** and was later downsized to **2X-Small** after the larger configuration proved unnecessary for the project's analytical workload.
+
+The smaller warehouse remained sufficient for:
+
+- SQL validation
+- dbt analytical work
+- Power BI consumption
+
+At the V2 checkpoint, cumulative Azure Databricks development spend was approximately **SEK 301**.
+
+Daily Databricks spending was substantially lower after right-sizing, although varying runtime between development days means the change is not presented as a controlled percentage saving.
+
+The engineering principle is:
+
+> **Measure actual usage, identify overprovisioned resources, and right-size infrastructure to the workload.**
 
 ---
 
@@ -378,19 +482,89 @@ The KPI calculations operate on observation-level data so aggregate percentages 
 
 | Technology | Purpose |
 |---|---|
-| **Python** | Ingestion, pipeline logic and GTFS-Realtime processing |
+| **Python** | GTFS ingestion and realtime feed processing |
 | **Azure Data Lake Storage Gen2** | Durable raw/archive storage |
-| **Databricks** | Distributed data platform and compute environment |
-| **Apache Spark / PySpark** | Distributed transformation and validation |
-| **Delta Lake** | Reliable Silver and Gold analytical storage |
+| **Databricks** | Compute and data platform |
+| **Apache Spark / PySpark** | Distributed-style transformation and validation |
+| **Delta Lake** | Trusted Silver and analytical storage |
 | **Unity Catalog** | Table organization and governance |
 | **dbt** | Gold-layer analytical modeling and testing |
 | **Apache Airflow** | Realtime workflow orchestration |
 | **Docker** | Reproducible local Airflow environment |
-| **Databricks SQL** | Analytical query and serving layer |
-| **Databricks AI/BI** | Interactive reliability dashboard |
-| **GTFS / GTFS-Realtime** | Static and realtime transit data standards |
-| **Azure Identity / SDKs** | Programmatic access to Azure storage |
+| **Databricks SQL** | Analytical serving layer |
+| **Power BI** | Historical reliability dashboard |
+| **GTFS / GTFS-Realtime** | Transit data standards |
+| **Azure Cost Management** | Cloud-cost visibility |
+
+---
+
+## Engineering Decisions
+
+The project is not intended to maximize technology count.
+
+Each component should either solve a real requirement or serve an explicit learning objective.
+
+### Why Spark and Databricks?
+
+**Spark was not strictly required by the data volume in this project.**
+
+The static GTFS dataset contains millions of stop-time records, but the workload could have been processed using simpler single-machine tooling.
+
+Spark and Databricks were deliberately selected because a major project objective was to develop practical experience with:
+
+- distributed data-processing concepts
+- PySpark transformations
+- Spark execution
+- Delta Lake
+- Databricks jobs and compute
+
+Spark is therefore used as the project's real processing engine rather than as an isolated technology demonstration, while being explicitly acknowledged as **learning-driven rather than required by scale**.
+
+This is intentional learning overengineering, not an architectural claim that simpler tooling would have been insufficient.
+
+### Why ADLS and Delta Lake?
+
+The two storage layers serve different responsibilities.
+
+**ADLS Raw** preserves source data and historical snapshots.
+
+**Delta Silver** provides structured and validated operational tables for downstream processing.
+
+Keeping these responsibilities separate preserves source truth and makes the pipeline easier to recover and reason about.
+
+### Why dbt?
+
+PySpark handles operational transformation and validation.
+
+dbt handles analytical modeling and reliability definitions.
+
+This separates data engineering logic from analytical business logic and allows V2 to deepen the analytics without redesigning the ingestion pipeline.
+
+### Why Airflow?
+
+The realtime workflow contains multiple dependent stages, repeated execution, ordering requirements, and validation.
+
+That creates a genuine orchestration problem.
+
+Airflow coordinates that workflow rather than being included only for technology coverage.
+
+### Why Power BI?
+
+V1 used Databricks AI/BI to prove the first analytical slice.
+
+V2 required a richer analytical product with route filtering, directional comparisons, tail-risk analysis, propagation analysis, and multiple coordinated views.
+
+Power BI became the V2 presentation layer while Databricks SQL remained the serving layer.
+
+### Why Not Automate Everything?
+
+Automation is added when it removes an actual operational problem.
+
+For example, the static ADLS-to-Databricks-volume handoff remains manual because automating an infrequent operation would currently add more complexity than value.
+
+The same principle applies to infrastructure-as-code, CI/CD, monitoring platforms, and other technologies:
+
+> **A technology is introduced when a concrete requirement justifies it, not because the project needs another logo.**
 
 ---
 
@@ -409,16 +583,27 @@ stockholm-transit-reliability/
 ├── dbt/
 │   ├── models/
 │   │   ├── daily_reliability_metrics.sql
+│   │   ├── delay_propagation_stop_events.sql
 │   │   ├── hourly_reliability_patterns.sql
+│   │   ├── reliability_stop_events.sql
 │   │   ├── reliability_stop_observations.sql
+│   │   ├── route_delay_propagation.sql
+│   │   ├── route_direction_reliability.sql
+│   │   ├── route_hourly_reliability.sql
 │   │   ├── route_reliability.sql
-│   │   └── stop_reliability.sql
+│   │   ├── route_stop_reliability.sql
+│   │   ├── route_weekday_reliability.sql
+│   │   ├── stop_reliability.sql
+│   │   ├── schema.yml
+│   │   └── sources.yml
 │   ├── tests/
 │   └── dbt_project.yml
 │
 ├── docs/
 │   ├── architecture-v1.png
-│   └── dashboard-v1.png
+│   ├── architecture-v2.png
+│   ├── dashboard-v1.png
+│   └── dashboard-v2.png
 │
 ├── src/
 │   ├── ingestion/
@@ -441,155 +626,90 @@ stockholm-transit-reliability/
 └── README.md
 ```
 
----
-
-## Engineering Decisions
-
-A major objective of the project is not simply to use as many technologies as possible.
-
-Each component should solve a specific problem.
-
-### Why Spark?
-
-The static GTFS dataset contains millions of stop-time records and provides a realistic environment for learning distributed transformation and validation.
-
-Spark is used as the project's primary processing engine rather than introducing it only as a technology demonstration.
-
-### Why ADLS and Delta Lake?
-
-The two storage layers serve different purposes.
-
-**ADLS Raw** preserves source data and historical snapshots.
-
-**Delta Silver/Gold** provides structured analytical tables optimized for transformation and querying.
-
-Keeping these responsibilities separate makes the pipeline easier to reason about and allows raw data to remain recoverable.
-
-### Why dbt?
-
-Spark handles operational transformation and validation.
-
-dbt handles analytical modeling.
-
-This keeps reliability definitions and Gold-layer SQL models separate from ingestion and lower-level data processing.
-
-### Why Airflow?
-
-The realtime pipeline contains multiple dependent stages and is designed to execute repeatedly.
-
-That creates a genuine orchestration requirement.
-
-Airflow therefore coordinates the workflow rather than being introduced solely to add another technology to the stack.
-
-### Why Docker?
-
-The Airflow environment contains several services and dependencies.
-
-Docker provides a reproducible local runtime without requiring Airflow components to be configured individually on the host machine.
-
-### Why not automate everything?
-
-V1 intentionally leaves some infrastructure and deployment processes manual.
-
-Automation is added when it removes an actual operational problem.
-
-The goal is to avoid turning the platform into a collection of technologies that increase complexity without improving the system.
+Raw and generated datasets are excluded from version control.
 
 ---
 
-## V1 Scope
+## Version History
 
-V1 establishes the first complete vertical slice of the platform:
+### V1 — Working Platform ✅
+
+V1 established the complete end-to-end foundation:
 
 ```text
-Source
-  ↓
+GTFS / GTFS-RT
+      ↓
 Ingestion
-  ↓
-Raw storage
-  ↓
-Distributed processing
-  ↓
-Validated Silver
-  ↓
-Analytical modeling
-  ↓
-Gold
-  ↓
-SQL serving
-  ↓
+      ↓
+ADLS Raw
+      ↓
+Databricks / PySpark
+      ↓
+Delta Silver
+      ↓
+dbt Gold
+      ↓
+Databricks SQL
+      ↓
 Dashboard
 ```
 
-It also establishes the realtime orchestration path:
+It also introduced the Airflow-controlled realtime workflow, historical snapshot preservation, validation, deduplication, and idempotent processing.
 
-```text
-Airflow
-   ↓
-Realtime ingestion
-   ↓
-Databricks processing
-   ↓
-Validation
-```
+### V2 — Analytical Depth ✅
 
-V1 is intentionally **not the final form of the project**.
+V2 expands the analytical capability of the working V1 platform.
 
-The objective of this release is to prove that the architecture works end-to-end and establish a stable foundation for future iterations.
+Key additions include:
 
-### Intentionally outside V1
+- longer realtime history
+- median and P95 reliability metrics
+- tail-risk analysis
+- route-stop analysis
+- direction-level analysis
+- hourly and weekday analysis
+- delay propagation and recovery
+- analytical sample-size guardrails
+- Power BI dashboard
+- Gold-to-dashboard validation
+- cloud-cost inspection and compute right-sizing
+- updated V2 architecture documentation
 
-V1 does not attempt to solve every future requirement.
-
-Examples of intentionally deferred work include:
-
-- continuously hosted Airflow
-- fully automated static ingestion-to-processing handoff
-- production CI/CD where it does not yet provide sufficient value
-- infrastructure-as-code without a concrete infrastructure-management need
-- long-term realtime history
-- advanced geospatial visualization
-- vehicle-position tracking
-- extensive operational monitoring
-
-These are potential future capabilities rather than requirements for declaring V1 complete.
+V2 intentionally improves **what can be learned from the system** rather than expanding infrastructure unnecessarily.
 
 ---
 
 ## Future Development
 
-Future releases can build on the V1 foundation without changing the project's core architecture unnecessarily.
+The roadmap is intentionally versioned to prevent scope creep.
 
-Potential directions include:
+### V3 — Live Product
 
-**Longer realtime collection**
+- Streamlit
+- live GPS / vehicle map
+- vehicles and routes
+- realtime delays and status
+- live product interaction
 
-Run the pipeline continuously for several days to build a richer historical dataset and expose more meaningful temporal reliability patterns.
+### V4 — Production Experiment
 
-**Cloud-hosted orchestration**
+- cloud-hosted Airflow
+- laptop-independent pipeline
+- limited 24/7 collection
+- cost monitoring
+- multi-day stability
 
-Move the Airflow scheduler from the local Docker environment to cloud-hosted infrastructure for a limited production-style collection period.
+### Final — Portfolio Release
 
-**Geospatial analysis**
+- final architecture
+- documentation
+- findings
+- costs and trade-offs
+- screenshots / demo
+- cleanup
+- final release
 
-Combine stop coordinates and realtime data to visualize reliability spatially across Stockholm.
-
-**Live vehicle tracking**
-
-Use vehicle-position data to build an interactive Streamlit map showing transit movement and operational state.
-
-**Deeper reliability analytics**
-
-Investigate patterns such as:
-
-- peak vs off-peak reliability
-- route-level volatility
-- recurring problem stops
-- reliability by direction
-- delay propagation across a trip
-- differences between scheduled and observed travel behavior
-
-Future features will be added based on analytical or operational value rather than technology count.
+New technologies will only be added when one of these requirements creates a concrete need for them.
 
 ---
 
@@ -599,17 +719,24 @@ This project is intentionally built under realistic constraints.
 
 Cloud resources are finite. Development time is finite. Scope is finite.
 
-The goal is therefore not to build the largest possible system, but to make deliberate engineering decisions while balancing:
+The objective is not to build the largest possible system, but to make deliberate decisions while balancing:
 
-- technical capability
+- learning value
 - analytical value
+- data quality
 - cloud cost
-- development time
 - maintainability
+- operational complexity
 - project scope
 
-The architecture is expected to evolve across releases.
+Some decisions in this project — most notably the use of Spark and Databricks — are intentionally **learning-driven**.
 
-V1 establishes the foundation.
+Other technologies are deliberately omitted when they do not solve a current problem.
 
-Later versions should improve it because new requirements justify the change — not because more technology can be added.
+**V1 established the working platform.**
+
+**V2 deepened the analytics.**
+
+Future versions will change the architecture only when new requirements justify that change.
+
+> **The project evolves because the problem evolves — not because more technology can be added.**
