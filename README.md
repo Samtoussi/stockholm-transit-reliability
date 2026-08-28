@@ -2,7 +2,7 @@
 
 A production-inspired data engineering platform for analyzing the reliability of public transport in Stockholm using static schedules and GTFS-Realtime data.
 
-The project combines **Azure Data Lake Storage, Databricks, PySpark, Delta Lake, dbt, Apache Airflow, Databricks SQL, and Power BI** to build an end-to-end pipeline from raw transit feeds to historical reliability analytics.
+The project combines **Azure Data Lake Storage, Databricks, PySpark, Delta Lake, dbt, Apache Airflow, Snowflake, and Power BI** to build an end-to-end pipeline from raw transit feeds to historical reliability analytics.
 
 > **Current release: V2 — Analytical Depth**
 
@@ -16,6 +16,7 @@ The project combines **Azure Data Lake Storage, Databricks, PySpark, Delta Lake,
 - [Pipeline](#pipeline)
   - [Static Pipeline](#static-pipeline)
   - [Realtime Pipeline](#realtime-pipeline)
+  - [Gold Publishing](#gold-publishing)
 - [Data Model](#data-model)
 - [Orchestration](#orchestration)
 - [Data Quality](#data-quality)
@@ -49,12 +50,13 @@ The platform:
 - preserves historical realtime observations
 - models reliability metrics with dbt
 - orchestrates the realtime pipeline with Apache Airflow
-- serves analytical models through Databricks SQL
+- publishes curated Gold models from Databricks to Snowflake
+- uses Snowflake as the analytical serving layer
 - presents historical reliability analysis in Power BI
 
 **V1** established the working end-to-end platform.
 
-**V2** keeps that architecture and focuses on deeper analysis: **P95 tail risk, route-stop reliability, directional asymmetry, temporal patterns, and delay propagation**.
+**V2** keeps that foundation and focuses on deeper analysis: **P95 tail risk, route-stop reliability, directional asymmetry, temporal patterns, and delay propagation**.
 
 The project is intentionally production-inspired without treating architectural complexity as a goal of its own.
 
@@ -64,7 +66,7 @@ The project is intentionally production-inspired without treating architectural 
 
 ![Stockholm Transit Reliability Architecture](docs/architecture-v2.png)
 
-The system separates four main concerns:
+The system separates five main concerns:
 
 **Raw storage**  
 Azure Data Lake Storage preserves static source files and timestamped GTFS-Realtime snapshots.
@@ -73,12 +75,35 @@ Azure Data Lake Storage preserves static source files and timestamped GTFS-Realt
 Databricks and PySpark convert source data into validated, typed Delta datasets.
 
 **Gold modeling**  
-dbt transforms trusted Silver data into reliability-focused analytical models.
+dbt transforms trusted Silver data into reliability-focused analytical models stored in Databricks.
 
-**Serving and visualization**  
-Databricks SQL serves the Gold layer to Power BI.
+**Analytical serving**  
+A dedicated PySpark publishing job transfers curated Gold tables from Databricks to Snowflake using the Spark Snowflake Connector.
+
+**Visualization**  
+Power BI connects to the Snowflake serving layer for historical reliability analysis.
 
 Apache Airflow operates separately as the **control plane**, coordinating when realtime jobs execute and in what order.
+
+The V2 analytical path is therefore:
+
+```text
+ADLS Raw
+    ↓
+Databricks / PySpark
+    ↓
+Delta Silver
+    ↓
+dbt Gold
+    ↓
+Spark Snowflake Connector
+    ↓
+Snowflake
+    ↓
+Power BI
+```
+
+Databricks SQL remains useful for development, validation, and ad hoc analytical queries, but Snowflake is the serving layer consumed by the V2 Power BI dashboard.
 
 ---
 
@@ -185,6 +210,43 @@ start_date
 
 Realtime trips must exist in the validated static `trips` table before they are accepted into the analytical pipeline.
 
+### Gold Publishing
+
+dbt builds the analytical Gold models in Databricks.
+
+A dedicated publishing job then reads selected Gold Delta tables and writes them to the `GOLD` schema in Snowflake through the **Spark Snowflake Connector**.
+
+The V2 publishing flow is:
+
+```text
+Databricks Gold Delta tables
+        ↓
+publish_gold_to_snowflake.py
+        ↓
+Spark Snowflake Connector
+        ↓
+Snowflake
+STOCKHOLM_TRANSIT.GOLD
+        ↓
+Power BI
+```
+
+The following analytical tables are published:
+
+```text
+route_reliability
+stop_reliability
+route_stop_reliability
+route_direction_reliability
+route_hourly_reliability
+route_weekday_reliability
+route_delay_propagation
+```
+
+Serving tables are written using **overwrite mode**, making each publish a full refresh of the curated analytical serving layer rather than an incremental append.
+
+Snowflake authentication uses key-pair authentication, with the private key retrieved securely from **Databricks Secrets** rather than stored directly in source code.
+
 ---
 
 ## Data Model
@@ -243,6 +305,10 @@ V2 extends the analytical layer beyond basic averages with:
 - direction-level reliability
 - hourly and weekday analysis
 - delay accumulation and recovery
+
+Gold models are built first in Databricks and remain the transformation source of truth.
+
+The curated subset required by downstream BI is then published to Snowflake, separating analytical model construction from dashboard serving.
 
 ---
 
@@ -356,6 +422,8 @@ This makes it possible to analyze whether a route tends to:
 
 V2 replaces the original Databricks AI/BI dashboard with a Power BI dashboard focused on deeper historical reliability analysis.
 
+Power BI consumes the curated analytical serving tables from **Snowflake**.
+
 The dashboard includes:
 
 - headline reliability KPIs
@@ -373,7 +441,7 @@ Global filters support analysis by:
 
 Route identifiers are kept unique internally even when different transport modes share the same public route number.
 
-The Power BI KPI calculations were cross-checked directly against the Gold `route_reliability` model and matched the SQL results at the V2 validation checkpoint.
+The Power BI KPI calculations were cross-checked against the Gold `route_reliability` model and matched the analytical results at the V2 validation checkpoint.
 
 The dashboard is designed for **historical analysis**, not live operational monitoring.
 
@@ -460,13 +528,15 @@ Cloud cost is treated as an engineering constraint.
 
 Azure Cost Management showed that Databricks compute was the dominant Azure service cost during development.
 
-The SQL warehouse was initially configured as **Small** and was later downsized to **2X-Small** after the larger configuration proved unnecessary for the project's analytical workload.
+The Databricks SQL warehouse was initially configured as **Small** and was later downsized to **2X-Small** after the larger configuration proved unnecessary for the project's development and analytical-query workload.
 
 The smaller warehouse remained sufficient for:
 
 - SQL validation
-- dbt analytical work
-- Power BI consumption
+- development queries
+- analytical inspection of Gold models
+
+Power BI consumption is served separately through Snowflake and therefore should not be attributed to the Databricks SQL Warehouse.
 
 At the V2 checkpoint, cumulative Azure Databricks development spend was approximately **SEK 301**.
 
@@ -484,14 +554,16 @@ The engineering principle is:
 |---|---|
 | **Python** | GTFS ingestion and realtime feed processing |
 | **Azure Data Lake Storage Gen2** | Durable raw/archive storage |
-| **Databricks** | Compute and data platform |
+| **Databricks** | Processing and transformation platform |
 | **Apache Spark / PySpark** | Distributed-style transformation and validation |
-| **Delta Lake** | Trusted Silver and analytical storage |
+| **Delta Lake** | Trusted Silver and Gold analytical storage |
 | **Unity Catalog** | Table organization and governance |
 | **dbt** | Gold-layer analytical modeling and testing |
 | **Apache Airflow** | Realtime workflow orchestration |
 | **Docker** | Reproducible local Airflow environment |
-| **Databricks SQL** | Analytical serving layer |
+| **Databricks SQL** | Development, validation, and ad hoc analytical queries |
+| **Spark Snowflake Connector** | Gold publishing from Databricks to Snowflake |
+| **Snowflake** | Analytical serving layer for downstream BI |
 | **Power BI** | Historical reliability dashboard |
 | **GTFS / GTFS-Realtime** | Transit data standards |
 | **Azure Cost Management** | Cloud-cost visibility |
@@ -540,6 +612,44 @@ dbt handles analytical modeling and reliability definitions.
 
 This separates data engineering logic from analytical business logic and allows V2 to deepen the analytics without redesigning the ingestion pipeline.
 
+### Why Snowflake?
+
+Databricks and Snowflake serve different responsibilities in the V2 architecture.
+
+**Databricks** is the primary processing and transformation environment. PySpark processes the operational data, Delta Lake stores trusted datasets, and dbt builds the analytical Gold models.
+
+**Snowflake** acts as the dedicated analytical serving layer consumed by Power BI.
+
+A publishing job bridges the two platforms:
+
+```text
+Databricks Gold
+      ↓
+PySpark publish job
+      ↓
+Spark Snowflake Connector
+      ↓
+Snowflake GOLD
+      ↓
+Power BI
+```
+
+This separates data-engineering workloads from downstream BI consumption and provides practical experience integrating two commonly used analytical platforms.
+
+As with Spark, this separation is **not required by the scale of the current workload**. A simpler architecture could serve Power BI directly from Databricks.
+
+Snowflake is deliberately included as a learning-driven architectural decision, while still being assigned a clear responsibility rather than added as an unused technology.
+
+### Why Full-Refresh the Snowflake Serving Layer?
+
+The current Gold serving tables are small analytical aggregates rather than large event-level datasets.
+
+For V2, replacing each Snowflake table during publishing is simpler to reason about than implementing incremental synchronization between two platforms.
+
+This keeps Databricks Gold as the analytical source of truth while Snowflake contains a clean serving copy for Power BI.
+
+If the serving datasets become substantially larger or publishing becomes more frequent, incremental loading can be reconsidered.
+
 ### Why Airflow?
 
 The realtime workflow contains multiple dependent stages, repeated execution, ordering requirements, and validation.
@@ -554,7 +664,7 @@ V1 used Databricks AI/BI to prove the first analytical slice.
 
 V2 required a richer analytical product with route filtering, directional comparisons, tail-risk analysis, propagation analysis, and multiple coordinated views.
 
-Power BI became the V2 presentation layer while Databricks SQL remained the serving layer.
+Power BI became the V2 presentation layer, consuming curated analytical tables from Snowflake.
 
 ### Why Not Automate Everything?
 
@@ -619,6 +729,9 @@ stockholm-transit-reliability/
 │   │   ├── validate_silver.py
 │   │   └── validate_timetable_handshake.py
 │   │
+│   ├── publish/
+│   │   └── publish_gold_to_snowflake.py
+│   │
 │   ├── main.py
 │   └── realtime.py
 │
@@ -628,13 +741,15 @@ stockholm-transit-reliability/
 
 Raw and generated datasets are excluded from version control.
 
+Local connectivity/debugging scripts are also kept outside the production project structure where appropriate.
+
 ---
 
 ## Version History
 
 ### V1 — Working Platform ✅
 
-V1 established the complete end-to-end foundation:
+V1 established the initial end-to-end foundation:
 
 ```text
 GTFS / GTFS-RT
@@ -670,12 +785,24 @@ Key additions include:
 - hourly and weekday analysis
 - delay propagation and recovery
 - analytical sample-size guardrails
+- Snowflake analytical serving layer
+- Gold publishing through the Spark Snowflake Connector
 - Power BI dashboard
-- Gold-to-dashboard validation
+- Gold-to-serving-to-dashboard validation
 - cloud-cost inspection and compute right-sizing
 - updated V2 architecture documentation
 
-V2 intentionally improves **what can be learned from the system** rather than expanding infrastructure unnecessarily.
+The V2 analytical serving path is:
+
+```text
+dbt Gold in Databricks
+        ↓
+Snowflake
+        ↓
+Power BI
+```
+
+V2 intentionally improves **what can be learned from the system** while adding infrastructure only where it has a defined responsibility or explicit learning objective.
 
 ---
 
@@ -729,13 +856,17 @@ The objective is not to build the largest possible system, but to make deliberat
 - operational complexity
 - project scope
 
-Some decisions in this project — most notably the use of Spark and Databricks — are intentionally **learning-driven**.
+Some decisions in this project — most notably the use of **Spark, Databricks, and the separate Snowflake serving layer** — are intentionally **learning-driven**.
+
+The project does not claim that its current data volume requires this architecture.
+
+Instead, these technologies are used in real roles within the pipeline so their operational characteristics, integration boundaries, costs, and trade-offs can be explored in practice.
 
 Other technologies are deliberately omitted when they do not solve a current problem.
 
 **V1 established the working platform.**
 
-**V2 deepened the analytics.**
+**V2 deepened the analytics and introduced a dedicated analytical serving layer.**
 
 Future versions will change the architecture only when new requirements justify that change.
 
