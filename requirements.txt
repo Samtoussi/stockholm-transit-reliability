@@ -4,3 +4,4 @@ pandas
 requests
 protobuf
 python-dotenv
+gtfs-realtime-bindings
