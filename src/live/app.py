@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from google.transit import gtfs_realtime_pb2
-
+print("=== APP MODULE STARTED ===", flush=True)
 
 # --------------------------------------------------
 # Page config
@@ -723,7 +723,7 @@ def get_next_stop(
 # Static data
 # --------------------------------------------------
 
-print("=== STARTING STATIC GTFS LOAD ===")
+print("=== STARTING STATIC GTFS LOAD ===", flush=True)
 
 (
     static_lookup,
@@ -732,7 +732,7 @@ print("=== STARTING STATIC GTFS LOAD ===")
     route_catalog,
 ) = load_static_data()
 
-print("=== STATIC GTFS LOAD COMPLETE ===")
+print("=== STATIC GTFS LOAD COMPLETE ===", flush=True)
 
 # --------------------------------------------------
 # Header
