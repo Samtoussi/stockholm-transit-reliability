@@ -1,0 +1,6 @@
+streamlit
+pydeck
+pandas
+requests
+protobuf
+python-dotenv
