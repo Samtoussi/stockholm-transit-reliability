@@ -2,9 +2,9 @@
 
 A production-inspired data engineering platform for analyzing the reliability of public transport in Stockholm using static schedules and GTFS-Realtime data.
 
-The project combines **Azure Data Lake Storage, Databricks, PySpark, Delta Lake, dbt, Apache Airflow, Snowflake, and Power BI** to build an end-to-end pipeline from raw transit feeds to historical reliability analytics.
+The project combines **Azure Data Lake Storage, Databricks, PySpark, Delta Lake, dbt, Apache Airflow, Snowflake, Power BI, and Streamlit** to build an end-to-end platform spanning historical transit analytics and a live realtime product.
 
-> **Current release: V2 — Analytical Depth**
+> **Current release: V3 — Live Product**
 
 ---
 
@@ -13,10 +13,16 @@ The project combines **Azure Data Lake Storage, Databricks, PySpark, Delta Lake,
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Data Sources](#data-sources)
-- [Pipeline](#pipeline)
+- [Historical Pipeline](#historical-pipeline)
   - [Static Pipeline](#static-pipeline)
-  - [Realtime Pipeline](#realtime-pipeline)
+  - [Realtime Historical Pipeline](#realtime-historical-pipeline)
   - [Gold Publishing](#gold-publishing)
+- [Live Product](#live-product)
+  - [Live Architecture](#live-architecture)
+  - [Live Vehicle Map](#live-vehicle-map)
+  - [Vehicle Following](#vehicle-following)
+  - [Route Discovery](#route-discovery)
+  - [Live Data Limitations](#live-data-limitations)
 - [Data Model](#data-model)
 - [Orchestration](#orchestration)
 - [Data Quality](#data-quality)
@@ -36,27 +42,37 @@ The project combines **Azure Data Lake Storage, Databricks, PySpark, Delta Lake,
 
 ## Overview
 
-Public transport reliability cannot be understood from schedules alone.
+Public transport reliability has both a **historical** and a **live operational** dimension.
 
-Static GTFS describes **what should happen**, while GTFS-Realtime describes **what is happening**. This project combines both to preserve realtime observations historically and analyze reliability across routes, stops, directions, transport modes, weekdays, and hours of the day.
+Static GTFS describes **what should happen**, while GTFS-Realtime describes **what is happening**.
+
+The project combines both to support two different products:
+
+1. a historical reliability platform for analyzing how Stockholm transit performs over time
+2. a live application for exploring active vehicles, routes, destinations, next stops, and realtime status
 
 The platform:
 
 - ingests and archives static GTFS data
 - collects GTFS-Realtime TripUpdates
 - stores immutable source snapshots in Azure Data Lake Storage
-- processes and validates data with PySpark in Databricks
+- processes and validates historical data with PySpark in Databricks
 - stores trusted Silver datasets using Delta Lake
 - preserves historical realtime observations
 - models reliability metrics with dbt
-- orchestrates the realtime pipeline with Apache Airflow
+- orchestrates the historical realtime pipeline with Apache Airflow
 - publishes curated Gold models from Databricks to Snowflake
 - uses Snowflake as the analytical serving layer
 - presents historical reliability analysis in Power BI
+- consumes live GTFS-Realtime VehiclePositions and TripUpdates
+- enriches live vehicles using static GTFS context
+- serves an interactive live transit application with Streamlit and PyDeck
 
-**V1** established the working end-to-end platform.
+**V1** established the working end-to-end data platform.
 
-**V2** keeps that foundation and focuses on deeper analysis: **P95 tail risk, route-stop reliability, directional asymmetry, temporal patterns, and delay propagation**.
+**V2** deepened the analytical layer with **P95 tail risk, route-stop reliability, directional asymmetry, temporal patterns, delay propagation, Snowflake serving, and Power BI**.
+
+**V3** introduces a separate **live transit product** focused on active vehicles and realtime passenger-facing context.
 
 The project is intentionally production-inspired without treating architectural complexity as a goal of its own.
 
@@ -64,46 +80,71 @@ The project is intentionally production-inspired without treating architectural 
 
 ## Architecture
 
-![Stockholm Transit Reliability Architecture](docs/architecture-v2.png)
+![Stockholm Transit Reliability Architecture](docs/architecture-v3.png)
 
-The system separates five main concerns:
+V3 separates the system into two paths with different requirements.
 
-**Raw storage**  
-Azure Data Lake Storage preserves static source files and timestamped GTFS-Realtime snapshots.
+### Historical Analytics
 
-**Silver processing**  
-Databricks and PySpark convert source data into validated, typed Delta datasets.
+The historical pipeline optimizes for:
 
-**Gold modeling**  
-dbt transforms trusted Silver data into reliability-focused analytical models stored in Databricks.
-
-**Analytical serving**  
-A dedicated PySpark publishing job transfers curated Gold tables from Databricks to Snowflake using the Spark Snowflake Connector.
-
-**Visualization**  
-Power BI connects to the Snowflake serving layer for historical reliability analysis.
-
-Apache Airflow operates separately as the **control plane**, coordinating when realtime jobs execute and in what order.
-
-The V2 analytical path is therefore:
+- durability
+- reproducibility
+- validation
+- historical accumulation
+- analytical modeling
+- BI consumption
 
 ```text
-ADLS Raw
-    ↓
+GTFS / GTFS-Realtime
+        ↓
+      ADLS
+        ↓
 Databricks / PySpark
-    ↓
-Delta Silver
-    ↓
-dbt Gold
-    ↓
+        ↓
+   Delta Silver
+        ↓
+     dbt Gold
+        ↓
 Spark Snowflake Connector
-    ↓
-Snowflake
-    ↓
-Power BI
+        ↓
+    Snowflake
+        ↓
+     Power BI
 ```
 
-Databricks SQL remains useful for development, validation, and ad hoc analytical queries, but Snowflake is the serving layer consumed by the V2 Power BI dashboard.
+### Live Product
+
+The live application optimizes for:
+
+- low latency
+- current state
+- lightweight processing
+- frequent refreshes
+- interactive exploration
+
+```text
+GTFS-Realtime
+VehiclePositions + TripUpdates
+            ↓
+        Python fetch
+            ↓
+    Decode + enrich
+            ↓
+       Static GTFS
+        trip/route/stop
+          context
+            ↓
+        Streamlit
+            ↓
+         PyDeck
+            ↓
+    Interactive live map
+```
+
+Apache Airflow remains the control plane for the historical realtime pipeline.
+
+The Streamlit live path is intentionally independent of the historical analytical pipeline.
 
 ---
 
@@ -111,7 +152,7 @@ Databricks SQL remains useful for development, validation, and ad hoc analytical
 
 ### Static GTFS
 
-Static GTFS provides the reference transit network and timetable.
+Static GTFS provides transit network and timetable context.
 
 Important entities include:
 
@@ -121,17 +162,48 @@ Important entities include:
 - stop times
 - service information
 
-These datasets define the validated transit scope used by downstream realtime processing.
+These datasets allow realtime identifiers to be translated into useful passenger-facing context such as:
+
+- route numbers
+- route names
+- destinations
+- stop names
+- trip stop sequences
+
+The historical pipeline and V3 live product use static GTFS for different purposes.
+
+The historical pipeline uses static data as part of its validated analytical scope.
+
+The V3 live application uses SL regional static GTFS directly as a lightweight lookup source for live trip, route, and stop enrichment.
 
 ### GTFS-Realtime
 
-The realtime pipeline consumes **TripUpdates** encoded as Protocol Buffers.
+The project consumes GTFS-Realtime Protocol Buffer feeds.
 
-Instead of keeping only the latest feed state, timestamped snapshots are archived so an ephemeral realtime source becomes a **historical analytical dataset**.
+The historical pipeline primarily consumes:
+
+```text
+TripUpdates
+```
+
+V3 additionally consumes:
+
+```text
+VehiclePositions
+TripUpdates
+```
+
+VehiclePositions provides the current geographic state of active vehicles.
+
+TripUpdates provides realtime stop-level information used to determine upcoming stops, estimated arrival times, and delay status.
+
+Instead of keeping only the latest TripUpdates state, the historical pipeline archives timestamped snapshots so an ephemeral realtime source becomes a **historical analytical dataset**.
+
+The V3 live path does the opposite: it deliberately focuses on the **current state** rather than persisting every live position.
 
 ---
 
-## Pipeline
+## Historical Pipeline
 
 ### Static Pipeline
 
@@ -158,11 +230,11 @@ stops
 stop_times
 ```
 
-Movement from the archived static GTFS files in ADLS to the Databricks working volume remains manual in V2.
+Movement from the archived static GTFS files in ADLS to the Databricks working volume remains manual.
 
 This is intentional: static timetable data changes infrequently, and automating the handoff does not currently solve a significant operational problem.
 
-### Realtime Pipeline
+### Realtime Historical Pipeline
 
 ```text
 GTFS-Realtime TripUpdates
@@ -216,8 +288,6 @@ dbt builds the analytical Gold models in Databricks.
 
 A dedicated publishing job then reads selected Gold Delta tables and writes them to the `GOLD` schema in Snowflake through the **Spark Snowflake Connector**.
 
-The V2 publishing flow is:
-
 ```text
 Databricks Gold Delta tables
         ↓
@@ -249,9 +319,163 @@ Snowflake authentication uses key-pair authentication, with the private key retr
 
 ---
 
+## Live Product
+
+V3 turns the realtime feeds into an interactive transit product.
+
+The application is deployed publicly with Streamlit Community Cloud:
+
+**Live application:** https://sthlmlive.streamlit.app
+
+![Stockholm Transit Live Map](docs/streamlit_gps1.png)
+
+### Live Architecture
+
+The live application deliberately avoids routing current vehicle positions through the historical data platform.
+
+```text
+VehiclePositions
+       +
+TripUpdates
+       +
+Static GTFS
+       ↓
+Python
+       ↓
+Realtime joins / enrichment
+       ↓
+Streamlit + PyDeck
+       ↓
+Live transit map
+```
+
+VehiclePositions are matched to static GTFS trips using `trip_id`.
+
+Static trip context resolves the associated:
+
+```text
+route_id
+route number
+route name
+destination
+transport mode
+```
+
+TripUpdates are matched against the live vehicle trip to provide stop-level realtime information.
+
+For each vehicle, the application identifies the first relevant upcoming stop and derives:
+
+- next stop
+- estimated arrival
+- arrival delay
+- realtime availability
+
+The live application refreshes automatically every **10 seconds**.
+
+This provides a responsive live experience while avoiding unnecessary requests on every browser interaction.
+
+### Live Vehicle Map
+
+The default map displays active SL vehicles geographically across the Stockholm region.
+
+Supported user-facing transport modes include:
+
+- bus
+- subway
+- tram
+- ferry
+
+Vehicle markers are visually separated by transport mode.
+
+The interface also displays:
+
+- number of live vehicles
+- number of active routes
+- percentage of vehicles with realtime stop information
+- VehiclePositions feed timestamp
+- TripUpdates feed timestamp
+
+The map is implemented with **PyDeck** and rendered inside Streamlit.
+
+### Vehicle Following
+
+Vehicles on the map are interactive.
+
+Selecting a vehicle enters a follow mode:
+
+![Stockholm Transit Vehicle Following](docs/streamlit_gps2.png)
+
+The map centers on the selected vehicle and continues updating its position as new VehiclePositions snapshots arrive.
+
+The selected vehicle is highlighted visually while the remaining stops for its trip provide route context.
+
+The application displays:
+
+```text
+route → destination
+transport mode
+next stop
+estimated arrival
+delay status
+last live update
+```
+
+The next stop is highlighted separately on the map.
+
+Users can stop following the vehicle and return to normal map exploration at any time.
+
+### Route Discovery
+
+The live application supports multiple ways to explore the network.
+
+Users can filter by:
+
+- transport mode
+- route
+
+A separate route search supports matching against human-readable route context such as:
+
+- route number
+- destination
+- route name
+
+Examples include searches such as:
+
+```text
+116
+Vällingby
+Akalla
+```
+
+The route catalog is scoped to routes actually observed in SL realtime data during the current application session.
+
+This prevents the broader static GTFS dataset from polluting the interface with unrelated regional routes while allowing route options to remain stable across individual realtime refreshes.
+
+### Live Data Limitations
+
+Realtime products inherit limitations from their upstream feeds.
+
+During V3 development, commuter rail vehicles were observed in the SL VehiclePositions feed with valid:
+
+- vehicle identifiers
+- GPS coordinates
+- timestamps
+
+but without the `trip_id` required to reliably associate those positions with a scheduled trip and route.
+
+Because the live application depends on deterministic trip-based enrichment, these vehicles cannot currently receive the same reliable route, destination, and stop context as the other supported transport modes.
+
+Rather than introduce a second realtime integration or heuristic matching path solely to work around this upstream limitation, commuter rail is excluded from the V3 user-facing transport modes.
+
+The limitation was verified empirically during development and is treated as an **upstream data-quality constraint**, not silently guessed around inside the application.
+
+V3 therefore prioritizes reliable context over displaying every available GPS coordinate.
+
+---
+
 ## Data Model
 
-The project follows a medallion-inspired architecture.
+The historical platform follows a medallion-inspired architecture.
 
 ### Raw
 
@@ -263,7 +487,7 @@ Source data is preserved rather than overwritten so ingestion and transformation
 
 Silver contains validated operational datasets stored as Delta tables.
 
-The realtime grain is:
+The historical realtime grain is:
 
 > **One realtime stop observation per feed snapshot.**
 
@@ -283,7 +507,7 @@ This makes historical realtime processing **append-only and idempotent** across 
 
 dbt contains the analytical reliability logic.
 
-Important V2 models include:
+Important models include:
 
 ```text
 reliability_stop_observations
@@ -297,7 +521,7 @@ delay_propagation_stop_events
 route_delay_propagation
 ```
 
-V2 extends the analytical layer beyond basic averages with:
+The analytical layer includes:
 
 - median delay
 - P95 arrival delay
@@ -310,11 +534,13 @@ Gold models are built first in Databricks and remain the transformation source o
 
 The curated subset required by downstream BI is then published to Snowflake, separating analytical model construction from dashboard serving.
 
+The V3 live application does **not** consume Gold tables because historical aggregates are not the appropriate serving model for current vehicle state.
+
 ---
 
 ## Orchestration
 
-Apache Airflow orchestrates the realtime workflow.
+Apache Airflow orchestrates the historical realtime workflow.
 
 The DAG is designed to run every **10 minutes**:
 
@@ -332,13 +558,17 @@ Databricks processing is triggered through the Databricks Jobs API, keeping orch
 
 The local environment is not kept running continuously during normal development because doing so would consume cloud compute without providing equivalent value.
 
-Continuous cloud-hosted execution is reserved for a later production experiment.
+Continuous cloud-hosted execution is reserved for the V4 production experiment.
+
+The V3 Streamlit application does not use Airflow for live refreshes.
+
+Streamlit directly fetches the current realtime feeds because introducing an orchestration layer between the source and an interactive live application would add latency and complexity without solving a current requirement.
 
 ---
 
 ## Data Quality
 
-Validation is part of the pipeline rather than only a dashboard concern.
+Validation is part of the platform rather than only a dashboard concern.
 
 Static checks include:
 
@@ -351,14 +581,22 @@ Static checks include:
 - invalid trip stop counts
 - GTFS times beyond 24:00
 
-Realtime protection includes:
+Historical realtime protection includes:
 
 - validated trip scope
 - snapshot-level deduplication
 - feed-level idempotency
 - append-only historical storage
 
-Historical accumulation and duplicate behavior were also sanity-checked directly in Silver during V2 development before the analytical release was finalized.
+Historical accumulation and duplicate behavior were also sanity-checked directly in Silver before the analytical release was finalized.
+
+V3 adds a different kind of validation challenge.
+
+Live data must be usable immediately, so the application handles incomplete realtime context gracefully.
+
+For example, a vehicle can have a valid live position while temporarily lacking a matching TripUpdate.
+
+In that case, the vehicle can still be represented without inventing an arrival estimate.
 
 ---
 
@@ -420,7 +658,7 @@ This makes it possible to analyze whether a route tends to:
 
 ![Stockholm Transit Reliability Power BI Dashboard](docs/dashboard-v2.png)
 
-V2 replaces the original Databricks AI/BI dashboard with a Power BI dashboard focused on deeper historical reliability analysis.
+V2 introduced a Power BI dashboard focused on deeper historical reliability analysis.
 
 Power BI consumes the curated analytical serving tables from **Snowflake**.
 
@@ -443,7 +681,11 @@ Route identifiers are kept unique internally even when different transport modes
 
 The Power BI KPI calculations were cross-checked against the Gold `route_reliability` model and matched the analytical results at the V2 validation checkpoint.
 
-The dashboard is designed for **historical analysis**, not live operational monitoring.
+Power BI remains the **historical analytical product**.
+
+Streamlit serves the **live product**.
+
+The two interfaces answer fundamentally different questions and therefore use different data paths.
 
 ---
 
@@ -514,7 +756,7 @@ How **often** delay increases and **how much** it changes are therefore distinct
 
 ### Current Analytical Limitation
 
-Temporal coverage is still uneven because the realtime pipeline has been run intermittently during development.
+Temporal coverage is still uneven because the historical realtime pipeline has been run intermittently during development.
 
 Time-of-day analysis is already usable with sample guardrails, but weekday coverage is not yet sufficient for strong network-wide conclusions.
 
@@ -546,25 +788,33 @@ The engineering principle is:
 
 > **Measure actual usage, identify overprovisioned resources, and right-size infrastructure to the workload.**
 
+V3 follows the same principle architecturally.
+
+Serving live vehicle positions does not require spinning up Databricks compute, querying Snowflake, or operating another persistent data-processing service.
+
+The live path therefore remains lightweight.
+
 ---
 
 ## Technology Stack
 
 | Technology | Purpose |
 |---|---|
-| **Python** | GTFS ingestion and realtime feed processing |
+| **Python** | GTFS ingestion, realtime feed processing, and live application logic |
 | **Azure Data Lake Storage Gen2** | Durable raw/archive storage |
-| **Databricks** | Processing and transformation platform |
+| **Databricks** | Historical processing and transformation platform |
 | **Apache Spark / PySpark** | Distributed-style transformation and validation |
 | **Delta Lake** | Trusted Silver and Gold analytical storage |
 | **Unity Catalog** | Table organization and governance |
 | **dbt** | Gold-layer analytical modeling and testing |
-| **Apache Airflow** | Realtime workflow orchestration |
+| **Apache Airflow** | Historical realtime workflow orchestration |
 | **Docker** | Reproducible local Airflow environment |
 | **Databricks SQL** | Development, validation, and ad hoc analytical queries |
 | **Spark Snowflake Connector** | Gold publishing from Databricks to Snowflake |
 | **Snowflake** | Analytical serving layer for downstream BI |
 | **Power BI** | Historical reliability dashboard |
+| **Streamlit** | Live transit web application |
+| **PyDeck** | Interactive live vehicle map |
 | **GTFS / GTFS-Realtime** | Transit data standards |
 | **Azure Cost Management** | Cloud-cost visibility |
 
@@ -610,17 +860,15 @@ PySpark handles operational transformation and validation.
 
 dbt handles analytical modeling and reliability definitions.
 
-This separates data engineering logic from analytical business logic and allows V2 to deepen the analytics without redesigning the ingestion pipeline.
+This separates data engineering logic from analytical business logic and allows the analytical layer to evolve without redesigning the ingestion pipeline.
 
 ### Why Snowflake?
 
-Databricks and Snowflake serve different responsibilities in the V2 architecture.
+Databricks and Snowflake serve different responsibilities in the historical architecture.
 
 **Databricks** is the primary processing and transformation environment. PySpark processes the operational data, Delta Lake stores trusted datasets, and dbt builds the analytical Gold models.
 
 **Snowflake** acts as the dedicated analytical serving layer consumed by Power BI.
-
-A publishing job bridges the two platforms:
 
 ```text
 Databricks Gold
@@ -636,7 +884,9 @@ Power BI
 
 This separates data-engineering workloads from downstream BI consumption and provides practical experience integrating two commonly used analytical platforms.
 
-As with Spark, this separation is **not required by the scale of the current workload**. A simpler architecture could serve Power BI directly from Databricks.
+As with Spark, this separation is **not required by the scale of the current workload**.
+
+A simpler architecture could serve Power BI directly from Databricks.
 
 Snowflake is deliberately included as a learning-driven architectural decision, while still being assigned a clear responsibility rather than added as an unused technology.
 
@@ -644,7 +894,7 @@ Snowflake is deliberately included as a learning-driven architectural decision, 
 
 The current Gold serving tables are small analytical aggregates rather than large event-level datasets.
 
-For V2, replacing each Snowflake table during publishing is simpler to reason about than implementing incremental synchronization between two platforms.
+Replacing each Snowflake table during publishing is simpler to reason about than implementing incremental synchronization between two platforms.
 
 This keeps Databricks Gold as the analytical source of truth while Snowflake contains a clean serving copy for Power BI.
 
@@ -652,7 +902,7 @@ If the serving datasets become substantially larger or publishing becomes more f
 
 ### Why Airflow?
 
-The realtime workflow contains multiple dependent stages, repeated execution, ordering requirements, and validation.
+The historical realtime workflow contains multiple dependent stages, repeated execution, ordering requirements, and validation.
 
 That creates a genuine orchestration problem.
 
@@ -664,7 +914,96 @@ V1 used Databricks AI/BI to prove the first analytical slice.
 
 V2 required a richer analytical product with route filtering, directional comparisons, tail-risk analysis, propagation analysis, and multiple coordinated views.
 
-Power BI became the V2 presentation layer, consuming curated analytical tables from Snowflake.
+Power BI became the historical presentation layer, consuming curated analytical tables from Snowflake.
+
+### Why a Separate Live Path?
+
+Historical analytics and a live transit application have different requirements.
+
+The historical pipeline needs:
+
+```text
+durable storage
+validation
+historical accumulation
+analytical transformations
+reproducibility
+```
+
+The live application needs:
+
+```text
+fresh state
+low latency
+lightweight joins
+frequent refreshes
+interactive serving
+```
+
+Routing every live GPS update through:
+
+```text
+ADLS
+→ Databricks
+→ Delta
+→ dbt
+→ Snowflake
+→ application
+```
+
+would add infrastructure and latency without solving a V3 requirement.
+
+The live product therefore consumes the realtime feeds directly and performs only the enrichment required to serve the application.
+
+This is a deliberate architectural boundary rather than a shortcut.
+
+### Why Streamlit?
+
+V3 required an interactive product rather than another analytical dashboard.
+
+The application needed:
+
+- map interaction
+- live refreshes
+- route filtering
+- route search
+- clickable vehicles
+- persistent vehicle-following state
+- realtime status presentation
+
+Streamlit provides the application layer while PyDeck handles the geographic visualization.
+
+This keeps the V3 serving architecture lightweight while still supporting the required product behavior.
+
+### Why Not Kafka or Streaming Infrastructure?
+
+The source already exposes frequently updated realtime state.
+
+The V3 product does not currently require:
+
+- event replay
+- multiple independent realtime consumers
+- high-throughput event processing
+- distributed stream transformations
+- sub-second latency
+
+Introducing Kafka or another streaming platform would therefore create infrastructure without a matching requirement.
+
+If future requirements change, that decision can be revisited.
+
+### Why Not Persist VehiclePositions?
+
+V3 asks:
+
+> **Where are the vehicles now?**
+
+The historical analytical pipeline asks:
+
+> **How reliable has the network been over time?**
+
+Persisting every GPS coordinate is not necessary to answer the current V3 product question.
+
+VehiclePositions are therefore treated as transient live state rather than another historical dataset.
 
 ### Why Not Automate Everything?
 
@@ -672,7 +1011,7 @@ Automation is added when it removes an actual operational problem.
 
 For example, the static ADLS-to-Databricks-volume handoff remains manual because automating an infrequent operation would currently add more complexity than value.
 
-The same principle applies to infrastructure-as-code, CI/CD, monitoring platforms, and other technologies:
+The same principle applies to infrastructure-as-code, CI/CD, monitoring platforms, streaming infrastructure, and other technologies:
 
 > **A technology is introduced when a concrete requirement justifies it, not because the project needs another logo.**
 
@@ -712,8 +1051,11 @@ stockholm-transit-reliability/
 ├── docs/
 │   ├── architecture-v1.png
 │   ├── architecture-v2.png
+│   ├── architecture-v3.png
 │   ├── dashboard-v1.png
-│   └── dashboard-v2.png
+│   ├── dashboard-v2.png
+│   ├── streamlit_gps1.png
+│   └── streamlit_gps2.png
 │
 ├── src/
 │   ├── ingestion/
@@ -732,14 +1074,26 @@ stockholm-transit-reliability/
 │   ├── publish/
 │   │   └── publish_gold_to_snowflake.py
 │   │
+│   ├── live/
+│   │   ├── app.py
+│   │   ├── inspect_missing_trip_vehicles.py
+│   │   ├── inspect_trip_updates.py
+│   │   ├── inspect_vehicle_positions.py
+│   │   └── inspect_vehicle_route_context.py
+│   │
 │   ├── main.py
 │   └── realtime.py
 │
 ├── .gitignore
+├── requirements.txt
 └── README.md
 ```
 
 Raw and generated datasets are excluded from version control.
+
+Local credentials and API keys are never committed.
+
+The Streamlit deployment receives its API credentials through encrypted application secrets.
 
 Local connectivity/debugging scripts are also kept outside the production project structure where appropriate.
 
@@ -773,9 +1127,9 @@ It also introduced the Airflow-controlled realtime workflow, historical snapshot
 
 ### V2 — Analytical Depth ✅
 
-V2 expands the analytical capability of the working V1 platform.
+V2 expanded the analytical capability of the working V1 platform.
 
-Key additions include:
+Key additions included:
 
 - longer realtime history
 - median and P95 reliability metrics
@@ -792,7 +1146,7 @@ Key additions include:
 - cloud-cost inspection and compute right-sizing
 - updated V2 architecture documentation
 
-The V2 analytical serving path is:
+The V2 analytical serving path became:
 
 ```text
 dbt Gold in Databricks
@@ -802,7 +1156,59 @@ Snowflake
 Power BI
 ```
 
-V2 intentionally improves **what can be learned from the system** while adding infrastructure only where it has a defined responsibility or explicit learning objective.
+V2 intentionally improved **what can be learned from the system** while adding infrastructure only where it had a defined responsibility or explicit learning objective.
+
+### V3 — Live Product ✅
+
+V3 extended the project from historical analytics into an interactive realtime product.
+
+Key additions include:
+
+- GTFS-Realtime VehiclePositions integration
+- TripUpdates integration for live stop context
+- static GTFS enrichment
+- live vehicle GPS map
+- bus, subway, tram, and ferry modes
+- transport-mode filtering
+- route filtering
+- route search
+- human-readable route labels and destinations
+- clickable live vehicles
+- vehicle-following mode
+- moving vehicle position updates
+- trip stop context
+- next-stop highlighting
+- estimated arrival
+- realtime delay status
+- live-update age
+- automatic 10-second refresh
+- Streamlit application
+- PyDeck map visualization
+- public Streamlit Cloud deployment
+- V3 architecture documentation
+- explicit handling of upstream commuter-rail data limitations
+
+The V3 live path is:
+
+```text
+VehiclePositions + TripUpdates
+            ↓
+          Python
+            ↓
+      Static GTFS join
+            ↓
+    Realtime enrichment
+            ↓
+        Streamlit
+            ↓
+         PyDeck
+            ↓
+     Live transit map
+```
+
+V3 deliberately keeps the live product independent from the historical analytical serving path.
+
+This prevents infrastructure designed for durable historical analytics from being unnecessarily inserted into a latency-sensitive live application.
 
 ---
 
@@ -810,30 +1216,31 @@ V2 intentionally improves **what can be learned from the system** while adding i
 
 The roadmap is intentionally versioned to prevent scope creep.
 
-### V3 — Live Product
-
-- Streamlit
-- live GPS / vehicle map
-- vehicles and routes
-- realtime delays and status
-- live product interaction
-
 ### V4 — Production Experiment
 
+The next version focuses on operating the historical data platform independently from the local development machine.
+
+Planned work includes:
+
 - cloud-hosted Airflow
-- laptop-independent pipeline
-- limited 24/7 collection
-- cost monitoring
-- multi-day stability
+- laptop-independent orchestration
+- limited 24/7 realtime collection
+- cloud-cost monitoring
+- stable multi-day operation
+- operational failure/recovery observation
+
+V4 is intentionally an **operational experiment**, not a mandate to rebuild the architecture.
+
+The objective is to learn what changes when a pipeline moves from manually supervised development to persistent operation.
 
 ### Final — Portfolio Release
 
 - final architecture
-- documentation
-- findings
+- documentation review
+- final analytical findings
 - costs and trade-offs
-- screenshots / demo
-- cleanup
+- screenshots and live demo
+- repository cleanup
 - final release
 
 New technologies will only be added when one of these requirements creates a concrete need for them.
@@ -850,7 +1257,9 @@ The objective is not to build the largest possible system, but to make deliberat
 
 - learning value
 - analytical value
+- product value
 - data quality
+- latency
 - cloud cost
 - maintainability
 - operational complexity
@@ -862,12 +1271,28 @@ The project does not claim that its current data volume requires this architectu
 
 Instead, these technologies are used in real roles within the pipeline so their operational characteristics, integration boundaries, costs, and trade-offs can be explored in practice.
 
-Other technologies are deliberately omitted when they do not solve a current problem.
+V3 also demonstrates the opposite decision.
+
+When the live product introduced a new requirement, existing technologies were **not automatically reused**.
+
+Databricks, Spark, dbt, Snowflake, and Airflow were intentionally kept out of the live serving path because they did not solve the live application's current requirements.
+
+The result is a project with two architectures optimized for two different questions:
+
+```text
+Historical:
+How reliable has Stockholm transit been?
+
+Live:
+What is happening in the network right now?
+```
 
 **V1 established the working platform.**
 
 **V2 deepened the analytics and introduced a dedicated analytical serving layer.**
 
-Future versions will change the architecture only when new requirements justify that change.
+**V3 turned realtime data into an interactive live product.**
+
+**V4 will test what it takes to operate the platform independently and continuously.**
 
 > **The project evolves because the problem evolves — not because more technology can be added.**
