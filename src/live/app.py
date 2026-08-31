@@ -64,7 +64,7 @@ TRIP_UPDATES_URL = (
 
 STATIC_URL = (
     "https://opendata.samtrafiken.se/"
-    "gtfs-sweden/sweden.zip"
+    "gtfs/sl/sl.zip"
 )
 
 STOCKHOLM_TZ = ZoneInfo("Europe/Stockholm")
