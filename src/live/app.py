@@ -723,6 +723,8 @@ def get_next_stop(
 # Static data
 # --------------------------------------------------
 
+print("=== STARTING STATIC GTFS LOAD ===")
+
 (
     static_lookup,
     stop_lookup,
@@ -730,6 +732,7 @@ def get_next_stop(
     route_catalog,
 ) = load_static_data()
 
+print("=== STATIC GTFS LOAD COMPLETE ===")
 
 # --------------------------------------------------
 # Header
