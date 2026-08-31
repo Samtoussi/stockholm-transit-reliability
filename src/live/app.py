@@ -32,10 +32,9 @@ st.set_page_config(
 
 load_dotenv()
 
-load_dotenv()
-
 REALTIME_API_KEY = os.getenv("TRAFIKLAB_REALTIME_API_KEY")
 STATIC_API_KEY = os.getenv("TRAFIKLAB_STATIC_API_KEY")
+REGIONAL_API_KEY = os.getenv("TRAFIKLAB_REGIONAL_API_KEY")
 
 if not REALTIME_API_KEY:
     REALTIME_API_KEY = st.secrets.get("TRAFIKLAB_REALTIME_API_KEY")
@@ -43,12 +42,19 @@ if not REALTIME_API_KEY:
 if not STATIC_API_KEY:
     STATIC_API_KEY = st.secrets.get("TRAFIKLAB_STATIC_API_KEY")
 
+if not REGIONAL_API_KEY:
+    REGIONAL_API_KEY = st.secrets.get("TRAFIKLAB_REGIONAL_API_KEY")
+
 if not REALTIME_API_KEY:
     st.error("TRAFIKLAB_REALTIME_API_KEY is missing")
     st.stop()
 
 if not STATIC_API_KEY:
     st.error("TRAFIKLAB_STATIC_API_KEY is missing")
+    st.stop()
+
+if not REGIONAL_API_KEY:
+    st.error("TRAFIKLAB_REGIONAL_API_KEY is missing")
     st.stop()
 
 
@@ -254,7 +260,7 @@ def load_static_data():
 
     response = requests.get(
         STATIC_URL,
-        params={"key": STATIC_API_KEY},
+        params={"key": REGIONAL_API_KEY},
         timeout=120,
     )
 
