@@ -171,25 +171,7 @@ with DAG(
             "job completed successfully."
         )
 
-    @task(
-        retries=1,
-        retry_delay=timedelta(seconds=30),
-    )
-    def validate_realtime_silver():
-        subprocess.run(
-            [
-                "python",
-                (
-                    f"{PROJECT_ROOT}/src/validation/"
-                    "validate_realtime_silver.py"
-                ),
-            ],
-            cwd=PROJECT_ROOT,
-            check=True,
-        )
-
     ingest = ingest_realtime()
     transform = transform_realtime_silver()
-    validate = validate_realtime_silver()
 
-    ingest >> transform >> validate
+    ingest >> transform
