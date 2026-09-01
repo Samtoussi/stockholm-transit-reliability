@@ -154,6 +154,9 @@ if "known_sl_route_ids" not in st.session_state:
 if "route_filter" not in st.session_state:
     st.session_state.route_filter = "__ALL__"
 
+if "debug_refresh_count" not in st.session_state:
+    st.session_state.debug_refresh_count = 0
+
 
 # --------------------------------------------------
 # Helpers
@@ -246,6 +249,51 @@ def stop_following():
 
 def select_route_from_search(route_id):
     st.session_state.route_filter = route_id
+
+
+def get_memory_mb():
+    """Return current process RSS memory on Linux, if available."""
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as file:
+            for line in file:
+                if line.startswith("VmRSS:"):
+                    kb = int(line.split()[1])
+                    return round(kb / 1024, 1)
+    except (OSError, ValueError, IndexError):
+        pass
+
+    return None
+
+
+def debug_refresh_log(
+    refresh_id,
+    stage,
+    started_at,
+    start_memory_mb,
+    **details,
+):
+    current_memory_mb = get_memory_mb()
+    elapsed_seconds = round(time.perf_counter() - started_at, 2)
+
+    memory_delta_mb = None
+    if current_memory_mb is not None and start_memory_mb is not None:
+        memory_delta_mb = round(current_memory_mb - start_memory_mb, 1)
+
+    detail_text = " ".join(
+        f"{key}={value}"
+        for key, value in details.items()
+    )
+
+    print(
+        "[LIVE DEBUG] "
+        f"refresh={refresh_id} "
+        f"stage={stage} "
+        f"elapsed={elapsed_seconds}s "
+        f"ram_mb={current_memory_mb} "
+        f"delta_mb={memory_delta_mb} "
+        f"{detail_text}",
+        flush=True,
+    )
 
 
 # --------------------------------------------------
@@ -768,8 +816,21 @@ st.caption(
 # Live fragment
 # --------------------------------------------------
 
-@st.fragment(run_every="60s")
+@st.fragment(run_every="10s")
 def live_map():
+
+    st.session_state.debug_refresh_count += 1
+    refresh_id = st.session_state.debug_refresh_count
+    refresh_started_at = time.perf_counter()
+    refresh_start_memory_mb = get_memory_mb()
+
+    debug_refresh_log(
+        refresh_id,
+        "start",
+        refresh_started_at,
+        refresh_start_memory_mb,
+        selected_vehicle=st.session_state.selected_vehicle_id,
+    )
 
     # --------------------------------------------------
     # Fetch realtime
@@ -786,6 +847,15 @@ def live_map():
             trip_updates,
             trip_feed_timestamp,
         ) = fetch_trip_updates()
+
+        debug_refresh_log(
+            refresh_id,
+            "after_fetch",
+            refresh_started_at,
+            refresh_start_memory_mb,
+            vehicles=len(vehicles),
+            trip_updates=len(trip_updates),
+        )
 
     except requests.RequestException as exc:
 
@@ -836,6 +906,14 @@ def live_map():
     live["destination"] = (
         live["destination"]
         .fillna("Unknown destination")
+    )
+
+    debug_refresh_log(
+        refresh_id,
+        "after_join",
+        refresh_started_at,
+        refresh_start_memory_mb,
+        live_rows=len(live),
     )
 
 
@@ -1713,6 +1791,15 @@ def live_map():
     # Map selection
     # --------------------------------------------------
 
+    debug_refresh_log(
+        refresh_id,
+        "before_map_render",
+        refresh_started_at,
+        refresh_start_memory_mb,
+        filtered_rows=len(filtered),
+        layers=len(map_layers),
+    )
+
     event = st.pydeck_chart(
         deck,
         use_container_width=True,
@@ -1913,5 +2000,13 @@ def live_map():
         )}"
     )
 
+
+    debug_refresh_log(
+        refresh_id,
+        "end",
+        refresh_started_at,
+        refresh_start_memory_mb,
+        selected_vehicle=selected_vehicle_id,
+    )
 
 live_map()
