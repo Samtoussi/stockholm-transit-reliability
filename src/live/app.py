@@ -768,7 +768,7 @@ st.caption(
 # Live fragment
 # --------------------------------------------------
 
-@st.fragment(run_every="10s")
+@st.fragment(run_every="60s")
 def live_map():
 
     # --------------------------------------------------
