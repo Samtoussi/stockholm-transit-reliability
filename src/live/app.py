@@ -451,6 +451,21 @@ def load_static_data():
     )
 
     # --------------------------------------------------
+    # trip_id + stop_sequence → Regional stop
+    # --------------------------------------------------
+
+    trip_stop_lookup = {
+        (
+            str(row.trip_id),
+            int(row.stop_sequence),
+        ): {
+            "stop_id": str(row.stop_id),
+            "stop_name": row.stop_name,
+        }
+        for row in trip_stops.itertuples()
+    }
+
+    # --------------------------------------------------
     # Human-friendly route catalog
     # --------------------------------------------------
 
@@ -539,6 +554,7 @@ def load_static_data():
         lookup,
         stop_lookup,
         trip_stops,
+        trip_stop_lookup,
         route_catalog,
     )
 
@@ -732,6 +748,7 @@ def get_next_stop(
     static_lookup,
     stop_lookup,
     trip_stops,
+    trip_stop_lookup,
     route_catalog,
 ) = load_static_data()
 
@@ -885,10 +902,23 @@ def live_map():
 
             continue
 
-        stop_name = stop_lookup.get(
-            next_stop["stop_id"],
-            "Unknown stop",
+        regional_stop = trip_stop_lookup.get(
+            (
+                str(row.trip_id),
+                int(next_stop["stop_sequence"]),
+            )
         )
+
+        if regional_stop:
+            stop_name = (
+                clean_text(regional_stop["stop_name"])
+                or "Unknown stop"
+            )
+            resolved_stop_id = regional_stop["stop_id"]
+
+        else:
+            stop_name = "Unknown stop"
+            resolved_stop_id = None
 
         event_time = (
             next_stop["arrival_time"]
@@ -914,7 +944,7 @@ def live_map():
         )
 
         next_stop_ids.append(
-            str(next_stop["stop_id"])
+            resolved_stop_id
         )
 
         realtime_statuses.append(
