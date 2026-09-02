@@ -300,7 +300,7 @@ def debug_refresh_log(
 # Static GTFS
 # --------------------------------------------------
 
-@st.cache_data(
+@st.cache_resource(
     show_spinner="Loading Stockholm GTFS static data..."
 )
 def load_static_data():
