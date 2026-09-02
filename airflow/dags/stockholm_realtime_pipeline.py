@@ -22,7 +22,7 @@ with DAG(
         "ingestion, transformation, and validation"
     ),
     start_date=datetime(2026, 8, 24),
-    schedule="*/10 * * * *",
+    schedule="0 * * * *",
     catchup=False,
     max_active_runs=1,
     tags=["stockholm", "gtfs", "realtime"],
